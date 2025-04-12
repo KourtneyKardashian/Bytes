@@ -1,19 +1,18 @@
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, send_file
 import requests
 import base64
-import pyzipper
+import zipfile
 from io import BytesIO
+import os
 
 app = Flask(__name__)
 
-# The URL for the download
 url = 'https://skript.gg/api/user/generic/download_launcher'
 
-# The function to download and extract the .exe file
 def download_and_extract_file(auth_token):
     try:
         headers = {
-            'Authorization': f'{auth_token}',  # Just use the token directly (no 'Bearer')
+            'Authorization': f'{auth_token}',
             'Accept': 'application/json',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
         }
@@ -25,23 +24,28 @@ def download_and_extract_file(auth_token):
             base64_string = response.json().get('result', '')
 
             if base64_string:
-                # Decode the base64 string
                 decoded_bytes = base64.b64decode(base64_string)
 
-                # Save the decoded bytes as a .zip file in memory
-                zip_file = BytesIO(decoded_bytes)
+                # Create a temporary file in the /tmp directory
+                temp_file_path = '/tmp/downloaded_file.zip'
 
-                # Extract the .exe file from the password-protected .zip
-                password = "skript.gg"
-                with pyzipper.AESZipFile(zip_file) as zip_file_obj:
-                    zip_file_obj.setpassword(password.encode('utf-8'))
+                # Save the decoded bytes to the temp file
+                with open(temp_file_path, 'wb') as temp_file:
+                    temp_file.write(decoded_bytes)
+
+                # Open the zip file and extract the exe file
+                with zipfile.ZipFile(temp_file_path) as zip_file_obj:
                     zip_contents = zip_file_obj.namelist()
 
                     for file_name in zip_contents:
                         if file_name.endswith('.exe'):
                             with zip_file_obj.open(file_name) as exe_file:
                                 exe_bytes = exe_file.read()
+
+                            # Optionally remove the temporary file after extraction
+                            os.remove(temp_file_path)
                             return exe_bytes
+
             return None
         else:
             return None
@@ -52,22 +56,20 @@ def download_and_extract_file(auth_token):
 @app.route('/download-exe', methods=['POST'])
 def download_exe():
     try:
-        # Get the authorization token from the request
         data = request.get_json()
         auth_token = data.get('Authorization', '')
 
         if not auth_token:
             return jsonify({"error": "Authorization token is missing"}), 400
 
-        # Download and extract the file
         exe_data = download_and_extract_file(auth_token)
 
         if exe_data:
-            # Send the extracted .exe file as raw bytes in the response
-            return Response(
-                exe_data,
-                content_type='application/octet-stream',  # Generic content type for binary data
-                status=200
+            return send_file(
+                BytesIO(exe_data),
+                as_attachment=True,
+                download_name="extracted_file.exe",
+                mimetype="application/octet-stream"
             )
         else:
             return jsonify({"error": "Failed to download or extract the file"}), 500
@@ -75,4 +77,5 @@ def download_exe():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Vercel expects a handler in the app.py file, but the serverless function handles the routing automatically
+if __name__ == '__main__':
+    app.run(debug=True)
